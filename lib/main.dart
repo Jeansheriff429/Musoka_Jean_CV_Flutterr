@@ -1,7 +1,15 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
+import 'package:image_picker/image_picker.dart';
+
+const String kBaseUrl = 'http://localhost/api-test/public';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,17 +30,167 @@ class Projet {
   const Projet(this.titre, this.description, this.tag);
 }
 
-class MembreFamille {
+class Membre {
+  final int? id;
   final String nom;
-  final String role;
-  final String photo;
-  const MembreFamille(this.nom, this.role, this.photo);
+  final String postnom;
+  final String prenom;
+  final String lieuNaissance;
+  final String dateNaissance;
+  final String parente;
+  final String? imageUrl;
+
+  Membre({
+    this.id,
+    required this.nom,
+    required this.postnom,
+    required this.prenom,
+    required this.lieuNaissance,
+    required this.dateNaissance,
+    required this.parente,
+    this.imageUrl,
+  });
+
+  factory Membre.fromJson(Map<String, dynamic> json) {
+    return Membre(
+      id: json['id'],
+      nom: json['nom'] ?? '',
+      postnom: json['postnom'] ?? '',
+      prenom: json['prenom'] ?? '',
+      lieuNaissance: json['lieu_naissance'] ?? '',
+      dateNaissance: json['date_naissance'] ?? '',
+      parente: json['parente'] ?? '',
+      imageUrl: json['image_url'],
+    );
+  }
+
+  Map<String, String> toJson() {
+    return {
+      'nom': nom,
+      'postnom': postnom,
+      'prenom': prenom,
+      'lieu_naissance': lieuNaissance,
+      'date_naissance': dateNaissance,
+      'parente': parente,
+    };
+  }
+}
+
+class ApiService {
+  static Map<String, String> get _headers => {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  };
+
+  static Future<Map<String, dynamic>> login(
+    String email,
+    String password,
+  ) async {
+    final res = await http.post(
+      Uri.parse('$kBaseUrl/accounts/login'),
+      headers: _headers,
+      body: jsonEncode({'email': email, 'password': password}),
+    );
+    final data = jsonDecode(res.body);
+    if (res.statusCode == 200 && data['success'] == true) {
+      return data;
+    }
+    throw Exception(data['message'] ?? 'Erreur de connexion');
+  }
+
+  static Future<List<Membre>> getMembres() async {
+    final res = await http.get(
+      Uri.parse('$kBaseUrl/famille-membres'),
+      headers: _headers,
+    );
+    if (res.statusCode == 200) {
+      final data = jsonDecode(res.body);
+      final list = data['data'] as List;
+      return list.map((e) => Membre.fromJson(e)).toList();
+    }
+    throw Exception('Erreur lors du chargement');
+  }
+
+  static String _parseError(http.Response res) {
+    try {
+      final data = jsonDecode(res.body);
+      if (data['errors'] != null) {
+        return (data['errors'] as Map).values.first.toString();
+      }
+      return data['message'] ?? 'Erreur inconnue';
+    } catch (_) {
+      return 'Erreur serveur (${res.statusCode})';
+    }
+  }
+
+  static Future<void> addMembre(Membre m, {File? image}) async {
+    try {
+      if (image != null) {
+        final request = http.MultipartRequest(
+          'POST',
+          Uri.parse('$kBaseUrl/famille-membres'),
+        );
+        request.headers.addAll({'Accept': 'application/json'});
+        request.fields.addAll(m.toJson());
+        request.files.add(
+          await http.MultipartFile.fromPath('image', image.path),
+        );
+
+        final response = await request.send();
+        final res = await http.Response.fromStream(response);
+        if (res.statusCode != 201) throw Exception(_parseError(res));
+      } else {
+        final res = await http.post(
+          Uri.parse('$kBaseUrl/famille-membres'),
+          headers: _headers,
+          body: jsonEncode(m.toJson()),
+        );
+        if (res.statusCode != 201) throw Exception(_parseError(res));
+      }
+    } catch (e) {
+      throw Exception(e.toString().replaceAll('Exception: ', ''));
+    }
+  }
+
+  static Future<void> updateMembre(Membre m, {File? image}) async {
+    try {
+      if (image != null) {
+        final request = http.MultipartRequest(
+          'POST',
+          Uri.parse('$kBaseUrl/famille-membres/${m.id}'),
+        );
+        request.headers.addAll({'Accept': 'application/json'});
+        request.fields.addAll(m.toJson());
+        request.files.add(
+          await http.MultipartFile.fromPath('image', image.path),
+        );
+
+        final response = await request.send();
+        final res = await http.Response.fromStream(response);
+        if (res.statusCode != 200) throw Exception(_parseError(res));
+      } else {
+        final res = await http.put(
+          Uri.parse('$kBaseUrl/famille-membres/${m.id}'),
+          headers: _headers,
+          body: jsonEncode(m.toJson()),
+        );
+        if (res.statusCode != 200) throw Exception(_parseError(res));
+      }
+    } catch (e) {
+      throw Exception(e.toString().replaceAll('Exception: ', ''));
+    }
+  }
+
+  static Future<void> deleteMembre(int id) async {
+    final res = await http.delete(
+      Uri.parse('$kBaseUrl/famille-membres/$id'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) throw Exception('Erreur lors de la suppression');
+  }
 }
 
 class Donnees {
-  static const identifiant = 'jean';
-  static const motDePasse = 'jean0101';
-
   static const nomComplet = 'Musoka Hamuli Jean';
   static const titre = 'Développeur Logiciel & Systèmes Embarqués';
   static const photo = 'assets/images/jean.jpg';
@@ -45,7 +203,13 @@ class Donnees {
       "Développeur logiciel et passionné des systèmes embarqués, avec une expérience en développement web, mobile et électronique. Actuellement en formation en génie logiciel, je conçois des solutions innovantes combinant hardware et software.";
 
   static const competences = <Competence>[
-    Competence('Développement Web', ['HTML', 'CSS', 'JavaScript', 'PHP', 'Python']),
+    Competence('Développement Web', [
+      'HTML',
+      'CSS',
+      'JavaScript',
+      'PHP',
+      'Python',
+    ]),
     Competence('Frameworks', ['Laravel']),
     Competence('Mobile', ['Flutter']),
     Competence('Bases de données', ['MySQL', 'SQL', 'Supabase']),
@@ -77,12 +241,7 @@ class Donnees {
       'Conception de projets robotiques et électroniques intelligents.',
       'Robotics',
     ),
-
-      Projet(
-      'BuyPaye',
-      'Application de transfert d\'argent',
-      'FinTech',
-    ),
+    Projet('BuyPaye', 'Application de transfert d\'argent', 'FinTech'),
   ];
 
   static const formations = [
@@ -95,11 +254,12 @@ class Donnees {
     ['Anglais', 'Intermédiaire'],
   ];
 
-  static const interets = ['Technologie', 'Robotique', 'Innovation', 'Musique', 'Électricité'];
-
-  static const famille = <MembreFamille>[
-    MembreFamille('Bahati Musoka', 'Frère', 'assets/images/bahati.jpg'),
-    MembreFamille('Dieum Hamuli', 'Frère', 'assets/images/dieum.jpg'),
+  static const interets = [
+    'Technologie',
+    'Robotique',
+    'Innovation',
+    'Musique',
+    'Électricité',
   ];
 }
 
@@ -119,9 +279,13 @@ TextStyle figtree(
   Color c = kInk,
   double? h,
   double? ls,
-}) =>
-    GoogleFonts.figtree(
-        fontSize: size, fontWeight: w, color: c, height: h, letterSpacing: ls);
+}) => GoogleFonts.figtree(
+  fontSize: size,
+  fontWeight: w,
+  color: c,
+  height: h,
+  letterSpacing: ls,
+);
 
 class CvApp extends StatelessWidget {
   const CvApp({super.key});
@@ -136,11 +300,7 @@ class CvApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(
           seedColor: kAccent,
           brightness: Brightness.light,
-        ).copyWith(
-          primary: kAccent,
-          surface: kSurface,
-          onSurface: kInk,
-        ),
+        ).copyWith(primary: kAccent, surface: kSurface, onSurface: kInk),
         scaffoldBackgroundColor: kBg,
         splashFactory: InkSparkle.splashFactory,
         textSelectionTheme: TextSelectionThemeData(
@@ -156,6 +316,7 @@ class CvApp extends StatelessWidget {
 
 class Photo extends StatelessWidget {
   final String? asset;
+  final String? networkUrl;
   final String nom;
   final double size;
   final double radius;
@@ -164,6 +325,7 @@ class Photo extends StatelessWidget {
   const Photo({
     super.key,
     this.asset,
+    this.networkUrl,
     required this.nom,
     this.size = 56,
     this.radius = 16,
@@ -178,8 +340,28 @@ class Photo extends StatelessWidget {
       height: size,
       color: kAccentSoft,
       alignment: Alignment.center,
-      child: Text(initiale, style: figtree(size * 0.4, w: FontWeight.w700, c: kAccent)),
+      child: Text(
+        initiale,
+        style: figtree(size * 0.4, w: FontWeight.w700, c: kAccent),
+      ),
     );
+
+    Widget child;
+    if (networkUrl != null) {
+      child = Image.network(
+        networkUrl!,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => placeholder,
+      );
+    } else if (asset != null) {
+      child = Image.asset(
+        asset!,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => placeholder,
+      );
+    } else {
+      child = placeholder;
+    }
 
     return Container(
       width: size,
@@ -190,13 +372,7 @@ class Photo extends StatelessWidget {
         color: kAccentSoft,
       ),
       clipBehavior: Clip.antiAlias,
-      child: asset == null
-          ? placeholder
-          : Image.asset(
-              asset!,
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => placeholder,
-            ),
+      child: child,
     );
   }
 }
@@ -209,10 +385,7 @@ class SectionTitle extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(top: 32, bottom: 16),
-      child: Text(
-        text,
-        style: figtree(18, w: FontWeight.w700, ls: -0.3),
-      ),
+      child: Text(text, style: figtree(18, w: FontWeight.w700, ls: -0.3)),
     );
   }
 }
@@ -222,12 +395,7 @@ class CardBox extends StatelessWidget {
   final EdgeInsets? padding;
   final VoidCallback? onTap;
 
-  const CardBox({
-    super.key,
-    required this.child,
-    this.padding,
-    this.onTap,
-  });
+  const CardBox({super.key, required this.child, this.padding, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -257,16 +425,21 @@ class CardBox extends StatelessWidget {
   }
 }
 
-void toast(BuildContext context, String msg) {
+void toast(BuildContext context, String msg, {bool isError = false}) {
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(
-      content: Text(msg, style: figtree(13, w: FontWeight.w500, c: Colors.white)),
-      behavior: SnackBarBehavior.floating,
-      margin: const EdgeInsets.fromLTRB(20, 0, 20, 90),
-      backgroundColor: kInk,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-    ));
+    ..showSnackBar(
+      SnackBar(
+        content: Text(
+          msg,
+          style: figtree(13, w: FontWeight.w500, c: Colors.white),
+        ),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.fromLTRB(20, 0, 20, 90),
+        backgroundColor: isError ? kDanger : kInk,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
 }
 
 class LoginPage extends StatefulWidget {
@@ -289,24 +462,25 @@ class _LoginPageState extends State<LoginPage> {
       _loading = true;
     });
 
-    await Future.delayed(const Duration(milliseconds: 500));
-    if (!mounted) return;
-
-    if (_idCtrl.text.trim().toLowerCase() == Donnees.identifiant &&
-        _mdpCtrl.text == Donnees.motDePasse) {
-      Navigator.pushReplacement(
-        context,
-        PageRouteBuilder(
-          transitionDuration: const Duration(milliseconds: 400),
-          pageBuilder: (_, __, ___) => const MainShell(),
-          transitionsBuilder: (_, a, __, c) => FadeTransition(opacity: a, child: c),
-        ),
-      );
-    } else {
+    try {
+      await ApiService.login(_idCtrl.text.trim(), _mdpCtrl.text);
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          PageRouteBuilder(
+            transitionDuration: const Duration(milliseconds: 400),
+            pageBuilder: (_, __, ___) => const MainShell(),
+            transitionsBuilder: (_, a, __, c) =>
+                FadeTransition(opacity: a, child: c),
+          ),
+        );
+      }
+    } catch (e) {
       setState(() {
-        _loading = false;
-        _error = 'Identifiant ou mot de passe incorrect.';
+        _error = e.toString().replaceFirst('Exception: ', '');
       });
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -329,17 +503,20 @@ class _LoginPageState extends State<LoginPage> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const SizedBox(height: 24),
-              
               const SizedBox(height: 36),
-
-              
-              Text('Connexion', style: figtree(34, w: FontWeight.w800, h: 1.1, ls: -1.0)),
+              Text(
+                'Connexion',
+                style: figtree(34, w: FontWeight.w800, h: 1.1, ls: -1.0),
+              ),
               const SizedBox(height: 12),
-              Text('Accédez au CV de Musoka Hamuli.', style: figtree(15, c: kInk2, h: 1.5)),
+              Text(
+                'Accédez au CV de Musoka Hamuli.',
+                style: figtree(15, c: kInk2, h: 1.5),
+              ),
               const SizedBox(height: 48),
 
               _buildField(
-                label: 'Identifiant',
+                label: 'Identifiant (Email)',
                 ctrl: _idCtrl,
                 textInputAction: TextInputAction.next,
               ),
@@ -351,7 +528,12 @@ class _LoginPageState extends State<LoginPage> {
                 onSubmitted: (_) => _submit(),
                 suffix: IconButton(
                   iconSize: 20,
-                  icon: Icon(_hide ? Icons.visibility_off_outlined : Icons.visibility_outlined, color: kInk3),
+                  icon: Icon(
+                    _hide
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined,
+                    color: kInk3,
+                  ),
                   onPressed: () => setState(() => _hide = !_hide),
                 ),
               ),
@@ -369,7 +551,10 @@ class _LoginPageState extends State<LoginPage> {
                       const Icon(Icons.error_outline, size: 18, color: kDanger),
                       const SizedBox(width: 10),
                       Expanded(
-                        child: Text(_error!, style: figtree(13, w: FontWeight.w500, c: kDanger)),
+                        child: Text(
+                          _error!,
+                          style: figtree(13, w: FontWeight.w500, c: kDanger),
+                        ),
                       ),
                     ],
                   ),
@@ -384,16 +569,28 @@ class _LoginPageState extends State<LoginPage> {
                   style: FilledButton.styleFrom(
                     backgroundColor: kAccent,
                     disabledBackgroundColor: kAccent.withOpacity(0.5),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
                     elevation: 0,
                   ),
                   child: _loading
                       ? const SizedBox(
                           width: 22,
                           height: 22,
-                          child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: Colors.white,
+                          ),
                         )
-                      : Text('Se connecter', style: figtree(16, w: FontWeight.w700, c: Colors.white)),
+                      : Text(
+                          'Se connecter',
+                          style: figtree(
+                            16,
+                            w: FontWeight.w700,
+                            c: Colors.white,
+                          ),
+                        ),
                 ),
               ),
             ],
@@ -416,7 +613,10 @@ class _LoginPageState extends State<LoginPage> {
       children: [
         Padding(
           padding: const EdgeInsets.only(left: 4, bottom: 8),
-          child: Text(label, style: figtree(13, w: FontWeight.w600, c: kInk2)),
+          child: Text(
+            label,
+            style: figtree(13, w: FontWeight.w600, c: kInk2),
+          ),
         ),
         TextField(
           controller: ctrl,
@@ -428,11 +628,23 @@ class _LoginPageState extends State<LoginPage> {
           decoration: InputDecoration(
             filled: true,
             fillColor: kSurface,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 16,
+            ),
             suffixIcon: suffix,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: kBorder)),
-            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: kBorder)),
-            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: kAccent, width: 1.5)),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: const BorderSide(color: kBorder),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: const BorderSide(color: kBorder),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: const BorderSide(color: kAccent, width: 1.5),
+            ),
           ),
         ),
       ],
@@ -455,7 +667,8 @@ class _MainShellState extends State<MainShell> {
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 350),
         pageBuilder: (_, __, ___) => const LoginPage(),
-        transitionsBuilder: (_, a, __, c) => FadeTransition(opacity: a, child: c),
+        transitionsBuilder: (_, a, __, c) =>
+            FadeTransition(opacity: a, child: c),
       ),
     );
   }
@@ -488,9 +701,21 @@ class _NavBar extends StatelessWidget {
   const _NavBar({required this.index, required this.onChange});
 
   static const _items = [
-    (icon: Icons.person_outline_rounded, active: Icons.person_rounded, label: 'Profil'),
-    (icon: Icons.grid_view_rounded, active: Icons.grid_view_rounded, label: 'Projets'),
-    (icon: Icons.people_outline_rounded, active: Icons.people_rounded, label: 'Famille'),
+    (
+      icon: Icons.person_outline_rounded,
+      active: Icons.person_rounded,
+      label: 'Profil',
+    ),
+    (
+      icon: Icons.grid_view_rounded,
+      active: Icons.grid_view_rounded,
+      label: 'Projets',
+    ),
+    (
+      icon: Icons.people_outline_rounded,
+      active: Icons.people_rounded,
+      label: 'Famille',
+    ),
   ];
 
   @override
@@ -526,7 +751,11 @@ class _NavBar extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             it.label,
-            style: figtree(11, w: active ? FontWeight.w700 : FontWeight.w500, c: active ? kAccent : kInk3),
+            style: figtree(
+              11,
+              w: active ? FontWeight.w700 : FontWeight.w500,
+              c: active ? kAccent : kInk3,
+            ),
           ),
         ],
       ),
@@ -553,7 +782,10 @@ class AccueilPage extends StatelessWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Mon CV', style: figtree(15, w: FontWeight.w600, c: kInk2)),
+                  Text(
+                    'Mon CV',
+                    style: figtree(15, w: FontWeight.w600, c: kInk2),
+                  ),
                   Material(
                     color: kSurface,
                     borderRadius: BorderRadius.circular(12),
@@ -566,7 +798,11 @@ class AccueilPage extends StatelessWidget {
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: kBorder),
                         ),
-                        child: const Icon(Icons.logout_rounded, size: 18, color: kInk2),
+                        child: const Icon(
+                          Icons.logout_rounded,
+                          size: 18,
+                          color: kInk2,
+                        ),
                       ),
                     ),
                   ),
@@ -577,15 +813,31 @@ class AccueilPage extends StatelessWidget {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Photo(asset: Donnees.photo, nom: Donnees.nomComplet, size: 80, radius: 24),
+                  Photo(
+                    asset: Donnees.photo,
+                    nom: Donnees.nomComplet,
+                    size: 80,
+                    radius: 24,
+                  ),
                   const SizedBox(width: 20),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(Donnees.nomComplet, style: figtree(22, w: FontWeight.w800, ls: -0.5)),
+                        Text(
+                          Donnees.nomComplet,
+                          style: figtree(22, w: FontWeight.w800, ls: -0.5),
+                        ),
                         const SizedBox(height: 4),
-                        Text(Donnees.titre, style: figtree(13, c: kAccent, w: FontWeight.w600, h: 1.4)),
+                        Text(
+                          Donnees.titre,
+                          style: figtree(
+                            13,
+                            c: kAccent,
+                            w: FontWeight.w600,
+                            h: 1.4,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -594,7 +846,10 @@ class AccueilPage extends StatelessWidget {
               const SizedBox(height: 24),
 
               CardBox(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 16,
+                ),
                 child: Column(
                   children: [
                     _contactLine(Icons.phone_rounded, Donnees.telephone),
@@ -607,7 +862,10 @@ class AccueilPage extends StatelessWidget {
                       padding: EdgeInsets.symmetric(vertical: 12),
                       child: Divider(color: kBorder, height: 1),
                     ),
-                    _contactLine(Icons.location_on_rounded, Donnees.localisation),
+                    _contactLine(
+                      Icons.location_on_rounded,
+                      Donnees.localisation,
+                    ),
                   ],
                 ),
               ),
@@ -623,12 +881,28 @@ class AccueilPage extends StatelessWidget {
                     Row(
                       children: [
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(color: kAccent, borderRadius: BorderRadius.circular(8)),
-                          child: Text(Donnees.posteActuel, style: figtree(11, w: FontWeight.w700, c: Colors.white)),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: kAccent,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            Donnees.posteActuel,
+                            style: figtree(
+                              11,
+                              w: FontWeight.w700,
+                              c: Colors.white,
+                            ),
+                          ),
                         ),
                         const SizedBox(width: 12),
-                        Text(Donnees.entreprise, style: figtree(16, w: FontWeight.w700)),
+                        Text(
+                          Donnees.entreprise,
+                          style: figtree(16, w: FontWeight.w700),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 16),
@@ -642,9 +916,17 @@ class AccueilPage extends StatelessWidget {
                               margin: const EdgeInsets.only(top: 6, right: 10),
                               width: 6,
                               height: 6,
-                              decoration: const BoxDecoration(color: kAccent, shape: BoxShape.circle),
+                              decoration: const BoxDecoration(
+                                color: kAccent,
+                                shape: BoxShape.circle,
+                              ),
                             ),
-                            Expanded(child: Text(m, style: figtree(13.5, c: kInk2, h: 1.5))),
+                            Expanded(
+                              child: Text(
+                                m,
+                                style: figtree(13.5, c: kInk2, h: 1.5),
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -660,13 +942,19 @@ class AccueilPage extends StatelessWidget {
                   for (var comp in Donnees.competences)
                     for (var item in comp.items)
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 8,
+                        ),
                         decoration: BoxDecoration(
                           color: kSurface,
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: kBorder),
                         ),
-                        child: Text(item, style: figtree(13, w: FontWeight.w500, c: kInk)),
+                        child: Text(
+                          item,
+                          style: figtree(13, w: FontWeight.w500, c: kInk),
+                        ),
                       ),
                 ],
               ),
@@ -682,8 +970,16 @@ class AccueilPage extends StatelessWidget {
                         padding: const EdgeInsets.all(16),
                         child: Row(
                           children: [
-                            Expanded(child: Text(Donnees.formations[i][0], style: figtree(14, w: FontWeight.w600))),
-                            Text(Donnees.formations[i][1], style: figtree(12, c: kInk3)),
+                            Expanded(
+                              child: Text(
+                                Donnees.formations[i][0],
+                                style: figtree(14, w: FontWeight.w600),
+                              ),
+                            ),
+                            Text(
+                              Donnees.formations[i][1],
+                              style: figtree(12, c: kInk3),
+                            ),
                           ],
                         ),
                       ),
@@ -704,8 +1000,14 @@ class AccueilPage extends StatelessWidget {
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Text(Donnees.langues[i][0], style: figtree(14, w: FontWeight.w600)),
-                            Text(Donnees.langues[i][1], style: figtree(13, c: kInk2)),
+                            Text(
+                              Donnees.langues[i][0],
+                              style: figtree(14, w: FontWeight.w600),
+                            ),
+                            Text(
+                              Donnees.langues[i][1],
+                              style: figtree(13, c: kInk2),
+                            ),
                           ],
                         ),
                       ),
@@ -721,12 +1023,18 @@ class AccueilPage extends StatelessWidget {
                 children: [
                   for (var interet in Donnees.interets)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
                       decoration: BoxDecoration(
                         color: kAccentSoft,
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Text(interet, style: figtree(13, w: FontWeight.w600, c: kAccent)),
+                      child: Text(
+                        interet,
+                        style: figtree(13, w: FontWeight.w600, c: kAccent),
+                      ),
                     ),
                 ],
               ),
@@ -770,9 +1078,15 @@ class ProjetsPage extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const SizedBox(height: 32),
-              Text('Mes Projets', style: figtree(28, w: FontWeight.w800, ls: -0.8)),
+              Text(
+                'Mes Projets',
+                style: figtree(28, w: FontWeight.w800, ls: -0.8),
+              ),
               const SizedBox(height: 8),
-              Text('Réalisations techniques et innovantes.', style: figtree(14, c: kInk2)),
+              Text(
+                'Réalisations techniques et innovantes.',
+                style: figtree(14, c: kInk2),
+              ),
               const SizedBox(height: 24),
 
               for (int i = 0; i < Donnees.projets.length; i++)
@@ -786,21 +1100,37 @@ class ProjetsPage extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Expanded(
-                              child: Text(Donnees.projets[i].titre, style: figtree(17, w: FontWeight.w700)),
+                              child: Text(
+                                Donnees.projets[i].titre,
+                                style: figtree(17, w: FontWeight.w700),
+                              ),
                             ),
                             const SizedBox(width: 12),
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 4,
+                              ),
                               decoration: BoxDecoration(
                                 color: kAccentSoft,
                                 borderRadius: BorderRadius.circular(8),
                               ),
-                              child: Text(Donnees.projets[i].tag, style: figtree(10, w: FontWeight.w700, c: kAccent)),
+                              child: Text(
+                                Donnees.projets[i].tag,
+                                style: figtree(
+                                  10,
+                                  w: FontWeight.w700,
+                                  c: kAccent,
+                                ),
+                              ),
                             ),
                           ],
                         ),
                         const SizedBox(height: 12),
-                        Text(Donnees.projets[i].description, style: figtree(13.5, c: kInk2, h: 1.5)),
+                        Text(
+                          Donnees.projets[i].description,
+                          style: figtree(13.5, c: kInk2, h: 1.5),
+                        ),
                       ],
                     ),
                   ),
@@ -813,57 +1143,404 @@ class ProjetsPage extends StatelessWidget {
   }
 }
 
-class FamillePage extends StatelessWidget {
+class FamillePage extends StatefulWidget {
   const FamillePage({super.key});
+  @override
+  State<FamillePage> createState() => _FamillePageState();
+}
+
+class _FamillePageState extends State<FamillePage> {
+  List<Membre> _membres = [];
+  bool _loading = true;
 
   @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      bottom: false,
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.only(bottom: 40),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const SizedBox(height: 32),
-              Text('Ma Famille', style: figtree(28, w: FontWeight.w800, ls: -0.8)),
-              const SizedBox(height: 8),
-              Text('Mes deux frères.', style: figtree(14, c: kInk2)),
-              const SizedBox(height: 24),
+  void initState() {
+    super.initState();
+    _load();
+  }
 
-              for (int i = 0; i < Donnees.famille.length; i++)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: CardBox(
-                    padding: const EdgeInsets.all(16),
-                    child: Row(
-                      children: [
-                        Photo(
-                          asset: Donnees.famille[i].photo,
-                          nom: Donnees.famille[i].nom,
-                          size: 60,
-                          circle: true,
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      _membres = await ApiService.getMembres();
+    } catch (e) {
+      if (mounted) toast(context, 'Erreur: $e', isError: true);
+    } finally {
+      setState(() => _loading = false);
+    }
+  }
+
+  void _showForm({Membre? membre}) {
+    final nomCtrl = TextEditingController(text: membre?.nom ?? '');
+    final postnomCtrl = TextEditingController(text: membre?.postnom ?? '');
+    final prenomCtrl = TextEditingController(text: membre?.prenom ?? '');
+    final lieuCtrl = TextEditingController(text: membre?.lieuNaissance ?? '');
+    final dateCtrl = TextEditingController(text: membre?.dateNaissance ?? '');
+    final parenteCtrl = TextEditingController(text: membre?.parente ?? '');
+    File? image;
+    final formKey = GlobalKey<FormState>();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: kSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(ctx).viewInsets.bottom,
+                left: 24,
+                right: 24,
+                top: 24,
+              ),
+              child: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: kBorder,
+                          borderRadius: BorderRadius.circular(2),
                         ),
-                        const SizedBox(width: 16),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Text(
+                      membre == null
+                          ? 'Ajouter un membre'
+                          : 'Modifier le membre',
+                      style: figtree(20, w: FontWeight.w800),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
                         Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(Donnees.famille[i].nom, style: figtree(16, w: FontWeight.w700)),
-                              const SizedBox(height: 4),
-                              Text(Donnees.famille[i].role, style: figtree(13, c: kInk2, w: FontWeight.w500)),
-                            ],
+                          child: _buildField('Nom', nomCtrl, required: true),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _buildField(
+                            'Postnom',
+                            postnomCtrl,
+                            required: true,
                           ),
                         ),
                       ],
                     ),
+                    const SizedBox(height: 12),
+                    _buildField('Prénom', prenomCtrl, required: true),
+                    const SizedBox(height: 12),
+                    _buildField('Lieu de naissance', lieuCtrl, required: true),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: dateCtrl,
+                      readOnly: true,
+                      style: figtree(14, w: FontWeight.w500),
+                      decoration: _inputDeco(
+                        'Date de naissance',
+                        suffix: const Icon(
+                          Icons.calendar_today,
+                          size: 20,
+                          color: kInk3,
+                        ),
+                      ),
+                      onTap: () async {
+                        final picked = await showDatePicker(
+                          context: ctx,
+                          initialDate: DateTime.now(),
+                          firstDate: DateTime(1900),
+                          lastDate: DateTime.now(),
+                        );
+                        if (picked != null) {
+                          setSheetState(() {
+                            dateCtrl.text = DateFormat('yyyy-MM-dd')
+                                .format(picked);
+                          });
+                        }
+                      },
+                      validator: (v) => v!.isEmpty ? 'Requis' : null,
+                    ),
+                    const SizedBox(height: 12),
+                    _buildField(
+                      'Lien de parenté (ex: Père)',
+                      parenteCtrl,
+                      required: true,
+                    ),
+                    const SizedBox(height: 16),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        final picker = ImagePicker();
+                        final picked = await picker.pickImage(
+                          source: ImageSource.gallery,
+                        );
+                        if (picked != null)
+                          setSheetState(() => image = File(picked.path));
+                      },
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: kBorder),
+                        foregroundColor: kAccent,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      icon: const Icon(Icons.image_outlined),
+                      label: Text(
+                        image == null
+                            ? 'Choisir une photo (Optionnel)'
+                            : 'Photo sélectionnée',
+                        style: figtree(13, w: FontWeight.w600),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    SizedBox(
+                      height: 52,
+                      child: FilledButton(
+                        onPressed: () async {
+                          if (!formKey.currentState!.validate()) return;
+
+                          final m = Membre(
+                            id: membre?.id,
+                            nom: nomCtrl.text,
+                            postnom: postnomCtrl.text,
+                            prenom: prenomCtrl.text,
+                            lieuNaissance: lieuCtrl.text,
+                            dateNaissance: dateCtrl.text,
+                            parente: parenteCtrl.text,
+                          );
+
+                          try {
+                            if (membre == null) {
+                              await ApiService.addMembre(m, image: image);
+                            } else {
+                              await ApiService.updateMembre(m, image: image);
+                            }
+                            if (ctx.mounted) Navigator.pop(ctx);
+                            _load();
+                          } catch (e) {
+                            if (ctx.mounted)
+                              toast(ctx, 'Erreur: $e', isError: true);
+                          }
+                        },
+                        style: FilledButton.styleFrom(
+                          backgroundColor: kAccent,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: Text(
+                          'Enregistrer',
+                          style: figtree(
+                            15,
+                            w: FontWeight.w700,
+                            c: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildField(
+    String label,
+    TextEditingController ctrl, {
+    bool required = false,
+  }) {
+    return TextFormField(
+      controller: ctrl,
+      style: figtree(14, w: FontWeight.w500),
+      decoration: _inputDeco(label),
+      validator: (v) => (required && v!.isEmpty) ? 'Requis' : null,
+    );
+  }
+
+  InputDecoration _inputDeco(String label, {Widget? suffix}) {
+    return InputDecoration(
+      labelText: label,
+      labelStyle: figtree(13, c: kInk2),
+      suffixIcon: suffix,
+      filled: true,
+      fillColor: kBg,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: kBorder),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: kBorder),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: kAccent, width: 1.5),
+      ),
+    );
+  }
+
+  void _delete(Membre m) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Supprimer', style: figtree(18, w: FontWeight.bold)),
+        content: Text('Voulez-vous supprimer ${m.nom} ?', style: figtree(14)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Annuler', style: figtree(14, c: kInk2)),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: kDanger),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              try {
+                await ApiService.deleteMembre(m.id!);
+                _load();
+              } catch (e) {
+                if (context.mounted) toast(context, '$e', isError: true);
+              }
+            },
+            child: Text('Supprimer', style: figtree(14, c: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: kBg,
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => _showForm(),
+        backgroundColor: kAccent,
+        child: const Icon(Icons.add, color: Colors.white),
+      ),
+      body: SafeArea(
+        bottom: false,
+        child: _loading
+            ? const Center(child: CircularProgressIndicator(color: kAccent))
+            : SingleChildScrollView(
+                padding: const EdgeInsets.only(bottom: 100),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const SizedBox(height: 32),
+                      Text(
+                        'Ma Famille',
+                        style: figtree(28, w: FontWeight.w800, ls: -0.8),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '${_membres.length} membres.',
+                        style: figtree(14, c: kInk2),
+                      ),
+                      const SizedBox(height: 24),
+
+                      if (_membres.isEmpty)
+                        CardBox(
+                          padding: const EdgeInsets.all(30),
+                          child: Center(
+                            child: Text(
+                              'Aucun membre pour le moment.',
+                              style: figtree(14, c: kInk3),
+                            ),
+                          ),
+                        )
+                      else
+                        for (int i = 0; i < _membres.length; i++)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 16),
+                            child: CardBox(
+                              padding: const EdgeInsets.all(16),
+                              child: Row(
+                                children: [
+                                  Photo(
+                                    networkUrl: _membres[i].imageUrl,
+                                    nom: _membres[i].nom,
+                                    size: 60,
+                                    circle: true,
+                                  ),
+                                  const SizedBox(width: 16),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          '${_membres[i].nom} ${_membres[i].prenom}',
+                                          style: figtree(
+                                            16,
+                                            w: FontWeight.w700,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          _membres[i].parente,
+                                          style: figtree(
+                                            13,
+                                            c: kInk2,
+                                            w: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  PopupMenuButton<String>(
+                                    padding: EdgeInsets.zero,
+                                    icon: const Icon(
+                                      Icons.more_vert,
+                                      color: kInk3,
+                                      size: 20,
+                                    ),
+                                    onSelected: (val) {
+                                      if (val == 'edit')
+                                        _showForm(membre: _membres[i]);
+                                      if (val == 'delete') _delete(_membres[i]);
+                                    },
+                                    itemBuilder: (c) => [
+                                      const PopupMenuItem(
+                                        value: 'edit',
+                                        child: Text('Modifier'),
+                                      ),
+                                      const PopupMenuItem(
+                                        value: 'delete',
+                                        child: Text(
+                                          'Supprimer',
+                                          style: TextStyle(color: kDanger),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                    ],
                   ),
                 ),
-            ],
-          ),
-        ),
+              ),
       ),
     );
   }
